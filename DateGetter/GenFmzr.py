@@ -4,7 +4,7 @@ import pickle
 from Spider import *
 
 def DevideTemp():
-    html_file = open("../fmzr_temp.html", encoding='utf-8')
+    html_file = open("../fnpur_temp.html", encoding='utf-8')
     html = "".join("".join(html_file.readlines()).split('\n'))
     
     html_parts = re.split("<table.*?.</table>", html)
@@ -124,6 +124,6 @@ if __name__ == "__main__":
         t_table = "<hr><nav><h2>%s</h2></nav>"%eng2chn[event] + t_table
         html_parts.insert(-1, t_table)
     
-    f = open("../fmzr.html", encoding='utf-8', mode='w') 
+    f = open("../fnpur.html", encoding='utf-8', mode='w') 
     f.write("".join(html_parts))
     
