@@ -106,5 +106,5 @@ if __name__ == "__main__":
             html_parts.insert(-1, t_table)
     
     f = open("../npur_plus.html", encoding='utf-8', mode='w') 
-    f.write("".join(html_parts))
+    f.write("\n".join(html_parts))
     

@@ -1,12 +1,14 @@
+import json
 import time
 import requests
-from bs4 import BeautifulSoup as BS
+from lxml import etree
 
-#To get HTML Text
-def GetHtml(url):
+# 返回html文本
+def GetHtml(url:str)->str:
     kv = {
         'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/75.0.3770.142 Safari/537.36',        
     }
+    # 异常处理防止get请求没有返回（被ban的情况etc）
     try:
         r = requests.get(url, timeout=7,headers = kv)
         r.raise_for_status()
@@ -15,139 +17,127 @@ def GetHtml(url):
     except:
         return ""
 
-# search people, get Candidates
-def GetCandidate(name):
-    search_api = 'https://cubingchina.com/results/person?region=World&gender=all&name='
-    search_html = GetHtml(search_api+name)
-    search_soup = BS(search_html, 'html.parser')
+# 按 id/name 粗略查询, 返回所有candidate
+# 返回 candidate_num:int, candidates:list
+# candidate 为一个元组, 格式为( name, wcaid, country, gender )
+def GetCandidate(name:str)->(int, list):
+    # 不直接json.loads(GetHtml(xxx)), 便于处理异常
+    result = GetHtml(
+        'http://wcads.lz1998.xin/wcaPerson/searchPeople?q=%s'%name
+    )
+    if result == "":
+        time.sleep(5) # 通过递归处理get请求没有返回的异常, 但是要加sleep, 不然stack overflow
+        return GetCandidate(name) 
     
-    candidates = []
-    candidate_num = 0
-    page_template = ''
-    search_page_num = 0
-    try:
-        page_template = 'https://cubingchina.com'+search_soup.find_all('li')[-2].a['href'].replace(';', '&')
-        page_template = '='.join(page_template.split('=')[:-1])+'='
-        search_page_num = int(search_soup.find_all('li')[-2].a['href'].split('=')[-1])
-        candidate_num += (search_page_num-1)*100
+    result_json = json.loads(result)
+    if (result_json['msg'] != 'ok'): # 异常处理, 原因类似上面
+        time.sleep(5)
+        return GetCandidate(name)
+    
+    char2chinese = {
+        'm':'男',
+        'f':'女'
+    }
 
-        # find the last page's people
-        last_page_url = page_template + str(search_page_num)
-        page_html = GetHtml(last_page_url)
-        page_soup = BS(page_html, 'html.parser')
-        for tr in page_soup.find_all('tr')[1:]:
-            candidates.append(
-                (
-                    tr.td.div.label.input['data-name'], 
-                    tr.td.div.label.input['data-id'],
-                    tr.find_all("td")[-2].string.strip(),
-                    tr.find_all("td")[-1].string.strip()
-                )
-            )
-            candidate_num += 1
-        
-    except:
-        # only one page
-        for tr in search_soup.find_all('tr')[1:]:
-            try:# page have people
-                candidates.append(
-                    (
-                        tr.td.div.label.input['data-name'], 
-                        tr.td.div.label.input['data-id'],
-                        tr.find_all("td")[-2].string.strip(),
-                        tr.find_all("td")[-1].string.strip()
-                    )
-                )
-                candidate_num += 1
-            except:
-                return 0, []
-    
-    
-    # for i in range(search_page_num):
-    #     page_url = page_template + str(i+1)
-    #     page_html = GetHtml(page_url)
-    #     page_soup = BS(page_html, 'html.parser')
-    #     for tr in page_soup.find_all('tr')[1:]:
-    #         candidates.append(
-    #             (
-    #                 tr.td.div.label.input['data-name'], 
-    #                 tr.td.div.label.input['data-id'],
-    #                 tr.find_all("td")[-2].string.strip(),
-    #                 tr.find_all("td")[-1].string.strip()
-    #             )
-    #         )
-    #         candidate_num += 1
-    
-    return candidate_num, candidates
+    can_num = result_json['totalElements']
+    cans = [
+        (i['name'], i['id'], i['countryId'], char2chinese[i['gender']])
+        for i in result_json['data']
+    ]
+    return can_num, cans
 
 
 # get someone's wca perform 
-# 返回字典
-# event : perform
-def GetPerform(wca_id):
-    people_root = 'https://cubingchina.com/results/person/'
-    people_page = people_root + wca_id
-    people_html = GetHtml(people_page)
-    people_soup = BS(people_html, 'html.parser')
-
+# 返回 event2perform:dict
+# 每个项目对应成绩 {event : perform}
+# perform:(single, avg), 没有avg使用''空字符串代替
+def GetPerform(wca_id:str)->dict:
     event2perform = {}
-    try:
-        event_list = people_soup.tbody.find_all('tr')
-    except:
-        print("鸭鸭鸭")
-        time.sleep(23)
+    comp = set()
+    solv = 0
+    
+    # 以下基本与GetCandidate类似
+    result = GetHtml(
+        'http://wcads.lz1998.xin/wcaResult/findResultsByPersonId?personId=%s'%wca_id
+    )
+    if result == "":
+        time.sleep(5) 
+        return GetPerform(wca_id) 
+    
+    result_json = json.loads(result)
+    if (result_json['msg'] != 'ok'):
+        time.sleep(5)
         return GetPerform(wca_id)
-    for event in event_list:
-        # 因为不一定就是event的表格
-        try:
-            if len(event('a')) == 3: # have avg perform
-                event2perform[event.td.a['href'][1:]] = (
-                    event('a')[1].string, event('a')[2].string
-                )
-            elif len(event('a')) == 2: # only single perform
-                event2perform[event.td.a['href'][1:]] = (
-                    event('a')[1].string, ''
-                )
-        except:
-            continue
+
+    # 对数据进行简单清洗
+    def deco(sig_raw:int, avg_raw:int)->(str, str):
+        sig_raw /= 100
+        avg_raw /= 100
+        sig = ''
+        avg = ''
+        if sig_raw <= 0:
+            sig = ''
+        else:
+            sig = '%.2f'%sig_raw
+        if avg_raw <= 0:
+            avg = ''
+        else:
+            avg = '%.2f'%avg_raw
+        return (sig, avg)
+    def MyMin(v1:str, v2:str)->str:
+        if v1 == '':
+            return v2
+        if v2 == '':
+            return v1
+        return str(min(float(v1), float(v2)))
+
+
+    for rnd in result_json['data']: # 对于每一轮
+        if rnd['eventId'] not in event2perform: # 之前没出现这个项目
+            event2perform[rnd['eventId']] = deco(rnd['best'], rnd['average'])
+        else: # 之前出现过
+            sig, avg = event2perform[rnd['eventId']]
+            new_sig, new_avg = deco(rnd['best'], rnd['average'])
+            sig = MyMin(sig, new_sig)
+            avg = MyMin(avg, new_avg)
+            event2perform[rnd['eventId']] = (sig, avg)
+
+        # 添加这场比赛, 注意使用的是set, 所以不会加重
+        comp.add(rnd['competitionId']) 
+
+        # 看六把成绩, 判断是否有效, 计算复原次数
+        for i in range(1, 6):
+            if rnd['value%d'%i] > 0:
+                solv += 1
+    
+    # 接下来是roa, lzdl的api没有, 使用xpath爬粗饼获得
+    html = GetHtml('https://cubingchina.com/results/person/%s'%wca_id)
+    html = etree.HTML(html)
     event2perform['roa'] = (
-        people_soup.find_all('tbody')[1].find_all('tr')[0].find_all('td')[1].string,
-        people_soup.find_all('tbody')[1].find_all('tr')[1].find_all('td')[1].string
+        html.xpath('//*[@id="yw1"]/table/tbody/tr[1]/td[6]/a/text()')[0],
+        html.xpath('//*[@id="yw1"]/table/tbody/tr[2]/td[6]/a/text()')[0]
     )
 
-    solved_trs = people_soup.find_all('tbody')[0].find_all('tr')
-    solved_times = 0
-    for tr in solved_trs:
-        solved_times += int(tr.find_all('td')[-1].string.split('/')[0])
-
+    # 参赛次数和复原次数
     event2perform['comp_solve'] = (
-        people_soup.find_all('span')[6].string, str(solved_times)
+        str(len(comp)), str(solv)
     )
     return event2perform
 
-def GenMessage(name):
-    message = []
-    cand_num, cands = GetCandidate(name)
+if __name__ == "__main__":
+    # html = GetHtml('http://wcads.lz1998.xin/wcaPerson/searchPeople?q=彭')
+    # data = json.loads(html)
+    # print(html)
+    # print(data['msg'])
+    # print(len(data['data']))
+    # num, can = GetCandidate("彭伟聪")
+    # print(can)
     
-    # fucking you~
-    if cand_num == 0:
-        message += "找不到鸭"
-    elif cand_num == 1:
-        message.append(cands[0][0])
-        message.append(','.join(cands[0][1:]))
+    # html = GetHtml('https://cubingchina.com/results/person/2012DEMU01')
+    # html = etree.HTML(html)
+    # print(html.xpath('//*[@id="yw1"]/table/tbody/tr[1]/td[2]/a/text()'))
+    # '//*[@id="yw1"]/table/tbody/tr[1]/td[2]/a'
+    # //*[@id="yw1"]/table/tbody/tr[2]/td[2]/a
 
-        cand_perform = GetPerform(cands[0][1])
-        for i in cand_perform:
-            if isinstance(cand_perform[i], tuple) and len(cand_perform[i]) == 2:
-                message.append('%s %s|%s'%(i, cand_perform[i][0], cand_perform[i][1]))
-            else:
-                message.append('%s %s'%(i, cand_perform[i]))
-    else:
-        message.append('找到了%d个人鸭'%cand_num)
-        for i in range(min(5, cand_num)):
-            message.append('%s|%s'%(cands[i][1], cands[i][0]))
-        if cand_num > 5:
-            message.append("...")
-    return '\n'.join(message)
-
-
+    perf = GetPerform('2017YANG16')
+    print(perf)
