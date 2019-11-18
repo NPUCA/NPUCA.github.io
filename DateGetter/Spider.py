@@ -124,6 +124,35 @@ def GetPerform(wca_id:str)->dict:
     )
     return event2perform
 
+
+def GenMessage(name):
+    message = []
+    cand_num, cands = GetCandidate(name)
+    
+    # fucking you~
+    if cand_num == 0:
+        message += "找不到鸭"
+    elif cand_num == 1:
+        message.append(cands[0][0])
+        message.append(','.join(cands[0][1:]))
+
+        cand_perform = GetPerform(cands[0][1])
+        for i in cand_perform:
+            if isinstance(cand_perform[i], tuple) and len(cand_perform[i]) == 2:
+                message.append('%s %s|%s'%(i, cand_perform[i][0], cand_perform[i][1]))
+            else:
+                message.append('%s %s'%(i, cand_perform[i]))
+    else:
+        message.append('找到了%d个人鸭'%cand_num)
+        for i in range(min(5, cand_num)):
+            message.append('%s|%s'%(cands[i][1], cands[i][0]))
+        if cand_num > 5:
+            message.append("...")
+    return '\n'.join(message)
+
+
+
+
 if __name__ == "__main__":
     # html = GetHtml('http://wcads.lz1998.xin/wcaPerson/searchPeople?q=彭')
     # data = json.loads(html)
